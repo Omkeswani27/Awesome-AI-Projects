@@ -1,0 +1,337 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+import requests
+from datetime import datetime, timedelta
+import threading
+import time
+
+class CryptoPredictorApp:
+    def _init_(self, root):
+        self.root = root
+        self.root.title("Cryptocurrency Price Predictor")
+        self.root.geometry("900x700")
+        self.root.configure(bg='#f0f0f0')
+        
+        # API configuration
+        self.API_KEY = "CG-PnocH7gvQqH6pmFjgzKfPXge"
+        self.BASE_URL = "https://api.coingecko.com/api/v3"
+        
+        # Data storage
+        self.crypto_list = []
+        self.historical_data = pd.DataFrame()
+        self.current_coin = None
+        
+        # Create GUI
+        self.setup_gui()
+        
+        # Fetch top cryptocurrencies in background
+        self.fetch_top_cryptos()
+    
+    def setup_gui(self):
+        # Main frame
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Title
+        title_label = ttk.Label(main_frame, text="Cryptocurrency Price Predictor", 
+                               font=("Arial", 16, "bold"))
+        title_label.grid(row=0, column=0, columnspan=3, pady=10)
+        
+        # Coin selection
+        ttk.Label(main_frame, text="Select Coin:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.coin_var = tk.StringVar()
+        self.coin_dropdown = ttk.Combobox(main_frame, textvariable=self.coin_var, state="readonly")
+        self.coin_dropdown.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
+        self.coin_dropdown.bind('<<ComboboxSelected>>', self.coin_selected)
+        
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=2, column=0, columnspan=3, pady=10)
+        
+        self.fetch_btn = ttk.Button(button_frame, text="Fetch Data", command=self.fetch_data)
+        self.fetch_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.predict_week_btn = ttk.Button(button_frame, text="Predict (1 Week)", 
+                                          command=lambda: self.predict_price(7))
+        self.predict_week_btn.pack(side=tk.LEFT, padx=5)
+        self.predict_week_btn.state(['disabled'])
+        
+        self.predict_month_btn = ttk.Button(button_frame, text="Predict (1 Month)", 
+                                           command=lambda: self.predict_price(30))
+        self.predict_month_btn.pack(side=tk.LEFT, padx=5)
+        self.predict_month_btn.state(['disabled'])
+        
+        # Info frame
+        info_frame = ttk.LabelFrame(main_frame, text="Current Price", padding="5")
+        info_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        
+        self.price_var = tk.StringVar(value="Please select a coin")
+        price_label = ttk.Label(info_frame, textvariable=self.price_var, font=("Arial", 12))
+        price_label.pack()
+        
+        # Prediction result
+        pred_frame = ttk.LabelFrame(main_frame, text="Prediction Result", padding="5")
+        pred_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        
+        self.prediction_var = tk.StringVar(value="No prediction yet")
+        prediction_label = ttk.Label(pred_frame, textvariable=self.prediction_var, 
+                                    font=("Arial", 11), foreground="blue")
+        prediction_label.pack()
+        
+        # Chart frame
+        chart_frame = ttk.LabelFrame(main_frame, text="Price Chart", padding="5")
+        chart_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
+        
+        # Matplotlib figure
+        self.fig, self.ax = plt.subplots(figsize=(8, 4))
+        self.canvas = FigureCanvasTkAgg(self.fig, master=chart_frame)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Status bar
+        self.status_var = tk.StringVar(value="Ready")
+        status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
+        status_bar.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        
+        # Configure grid weights
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(5, weight=1)
+    
+    def fetch_top_cryptos(self):
+        def fetch_thread():
+            self.status_var.set("Fetching top cryptocurrencies...")
+            try:
+                url = f"{self.BASE_URL}/coins/markets"
+                params = {
+                    'vs_currency': 'usd',
+                    'order': 'market_cap_desc',
+                    'per_page': 10,
+                    'page': 1,
+                    'sparkline': 'false'
+                }
+                
+                response = requests.get(url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                self.crypto_list = [(coin['id'], coin['name']) for coin in data]
+                
+                # Update dropdown
+                self.root.after(0, self.update_dropdown)
+                self.status_var.set("Top cryptocurrencies loaded")
+                
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to fetch cryptocurrencies: {str(e)}"))
+                self.status_var.set("Error fetching data")
+        
+        threading.Thread(target=fetch_thread, daemon=True).start()
+    
+    def update_dropdown(self):
+        display_names = [f"{name} ({id})" for id, name in self.crypto_list]
+        self.coin_dropdown['values'] = display_names
+        if display_names:
+            self.coin_dropdown.current(0)
+            self.coin_selected()
+    
+    def coin_selected(self, event=None):
+        selection = self.coin_var.get()
+        if selection:
+            # Extract coin id from display text (format: "Name (id)")
+            self.current_coin = selection.split('(')[-1].rstrip(')')
+            self.price_var.set(f"Selected: {selection}. Click 'Fetch Data' to get current price.")
+            self.predict_week_btn.state(['disabled'])
+            self.predict_month_btn.state(['disabled'])
+            self.historical_data = pd.DataFrame()
+            self.clear_chart()
+    
+    def fetch_data(self):
+        if not self.current_coin:
+            messagebox.showwarning("Warning", "Please select a coin first")
+            return
+        
+        def fetch_thread():
+            self.status_var.set(f"Fetching data for {self.current_coin}...")
+            try:
+                # Get current price
+                url = f"{self.BASE_URL}/simple/price"
+                params = {
+                    'ids': self.current_coin,
+                    'vs_currencies': 'usd',
+                    'include_market_cap': 'false',
+                    'include_24hr_vol': 'false',
+                    'include_24hr_change': 'false',
+                    'include_last_updated_at': 'false'
+                }
+                
+                response = requests.get(url, params=params)
+                response.raise_for_status()
+                current_data = response.json()
+                current_price = current_data[self.current_coin]['usd']
+                
+                # Get historical data (last 90 days)
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=90)
+                
+                url = f"{self.BASE_URL}/coins/{self.current_coin}/market_chart/range"
+                params = {
+                    'vs_currency': 'usd',
+                    'from': int(start_date.timestamp()),
+                    'to': int(end_date.timestamp())
+                }
+                
+                response = requests.get(url, params=params)
+                response.raise_for_status()
+                historical_data = response.json()
+                
+                # Process historical data
+                prices = historical_data['prices']
+                dates = [datetime.fromtimestamp(price[0]/1000) for price in prices]
+                values = [price[1] for price in prices]
+                
+                self.historical_data = pd.DataFrame({
+                    'date': dates,
+                    'price': values
+                })
+                
+                # Calculate 20-day EMA
+                self.historical_data['ema_20'] = self.historical_data['price'].ewm(span=20).mean()
+                
+                # Update GUI
+                self.root.after(0, lambda: self.update_display(current_price))
+                self.status_var.set(f"Data fetched for {self.current_coin}")
+                
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to fetch data: {str(e)}"))
+                self.status_var.set("Error fetching data")
+        
+        threading.Thread(target=fetch_thread, daemon=True).start()
+    
+    def update_display(self, current_price):
+        self.price_var.set(f"Current price: ${current_price:,.2f}")
+        self.predict_week_btn.state(['!disabled'])
+        self.predict_month_btn.state(['!disabled'])
+        self.plot_data()
+    
+    def plot_data(self):
+        if self.historical_data.empty:
+            return
+        
+        self.ax.clear()
+        
+        # Plot historical data
+        self.ax.plot(self.historical_data['date'], self.historical_data['price'], 
+                    label='Price', linewidth=2)
+        
+        # Plot EMA
+        self.ax.plot(self.historical_data['date'], self.historical_data['ema_20'], 
+                    label='20-day EMA', linestyle='--', linewidth=2)
+        
+        self.ax.set_title(f'{self.current_coin.upper()} Price History')
+        self.ax.set_xlabel('Date')
+        self.ax.set_ylabel('Price (USD)')
+        self.ax.legend()
+        self.ax.grid(True, linestyle='--', alpha=0.7)
+        
+        # Format x-axis dates
+        self.fig.autofmt_xdate()
+        
+        self.canvas.draw()
+    
+    def clear_chart(self):
+        self.ax.clear()
+        self.ax.set_title('Price History')
+        self.ax.set_xlabel('Date')
+        self.ax.set_ylabel('Price (USD)')
+        self.ax.grid(True, linestyle='--', alpha=0.7)
+        self.canvas.draw()
+    
+    def predict_price(self, days_ahead):
+        if self.historical_data.empty:
+            messagebox.showwarning("Warning", "Please fetch data first")
+            return
+        
+        self.status_var.set("Training model and making prediction...")
+        
+        # Use a simple linear regression model with EMA as feature
+        data = self.historical_data.copy()
+        
+        # Prepare features (using days as feature and EMA)
+        data['day'] = range(len(data))
+        X = data[['day', 'ema_20']].values
+        y = data['price'].values
+        
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        
+        # Train model
+        model = LinearRegression()
+        model.fit(X_train, y_train)
+        
+        # Evaluate model
+        y_pred = model.predict(X_test)
+        mse = mean_squared_error(y_test, y_pred)
+        rmse = np.sqrt(mse)
+        
+        # Predict future price
+        last_day = data['day'].iloc[-1]
+        last_ema = data['ema_20'].iloc[-1]
+        
+        future_day = last_day + days_ahead
+        # For future EMA, we'll estimate it based on recent trend
+        ema_trend = data['ema_20'].diff().mean()
+        future_ema = last_ema + (ema_trend * days_ahead)
+        
+        future_price = model.predict([[future_day, future_ema]])[0]
+        current_price = data['price'].iloc[-1]
+        
+        # Update prediction display
+        change = ((future_price - current_price) / current_price) * 100
+        direction = "↑" if change > 0 else "↓"
+        
+        prediction_text = (f"Predicted price in {days_ahead} days: ${future_price:,.2f} "
+                          f"({direction} {abs(change):.2f}%) | Model RMSE: ${rmse:.2f}")
+        
+        self.prediction_var.set(prediction_text)
+        
+        # Add prediction to chart
+        self.add_prediction_to_chart(days_ahead, future_price, current_price)
+        
+        self.status_var.set("Prediction complete")
+    
+    def add_prediction_to_chart(self, days_ahead, future_price, current_price):
+        if self.historical_data.empty:
+            return
+        
+        last_date = self.historical_data['date'].iloc[-1]
+        future_date = last_date + timedelta(days=days_ahead)
+        
+        # Plot prediction point
+        self.ax.plot(future_date, future_price, 'ro', markersize=8, label='Prediction')
+        
+        # Draw line from current price to prediction
+        self.ax.plot([last_date, future_date], [current_price, future_price], 
+                    'r--', linewidth=2, alpha=0.7)
+        
+        # Add annotation
+        self.ax.annotate(f'${future_price:,.2f}', 
+                        xy=(future_date, future_price),
+                        xytext=(10, 10), textcoords='offset points',
+                        bbox=dict(boxstyle='round,pad=0.3', fc='red', alpha=0.2),
+                        arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+        
+        self.ax.legend()
+        self.fig.autofmt_xdate()
+        self.canvas.draw()
+
+if _name_ == "_main_":
+    root = tk.Tk()
+    app = CryptoPredictorApp(root)
+    root.mainloop()
