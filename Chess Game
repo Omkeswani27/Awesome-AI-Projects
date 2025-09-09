@@ -1,0 +1,819 @@
+import pygame
+import sys
+import random
+import time
+import math
+from pygame.locals import *
+
+# Initialize pygame
+pygame.init()
+pygame.mixer.init()
+
+# Constants
+WIDTH, HEIGHT = 900, 700
+BOARD_SIZE = 560
+SQUARE_SIZE = BOARD_SIZE // 8
+FPS = 60
+
+# Colors
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+DARK_SQUARE = (118, 150, 86)
+LIGHT_SQUARE = (238, 238, 210)
+HIGHLIGHT = (186, 202, 86, 180)
+MOVE_HIGHLIGHT = (119, 151, 86, 180)
+DARKER_SQUARE = (80, 120, 70)
+LIGHTER_SQUARE = (208, 218, 180)
+BLUE = (66, 135, 245)
+LIGHT_BLUE = (170, 210, 255)
+DARK_BLUE = (40, 100, 200)
+GRAY = (180, 180, 180)
+LIGHT_GRAY = (230, 230, 230)
+DARK_GRAY = (100, 100, 100)
+GOLD = (212, 175, 55)
+WOOD = (150, 111, 51)
+DARK_WOOD = (120, 81, 45)
+
+# Set up the display
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption('Advanced Python Chess AI')
+clock = pygame.time.Clock()
+
+# Load piece images (simulated with Unicode in this example)
+class Piece:
+    def __init__(self, symbol, color, value):
+        self.symbol = symbol
+        self.color = color
+        self.value = value
+        self.has_moved = False
+
+# Chess pieces
+pieces = {
+    'wK': Piece('♔', 'w', 100), 'wQ': Piece('♕', 'w', 9), 
+    'wR': Piece('♖', 'w', 5), 'wB': Piece('♗', 'w', 3), 
+    'wN': Piece('♘', 'w', 3), 'wP': Piece('♙', 'w', 1),
+    'bK': Piece('♚', 'b', 100), 'bQ': Piece('♛', 'b', 9), 
+    'bR': Piece('♜', 'b', 5), 'bB': Piece('♝', 'b', 3), 
+    'bN': Piece('♞', 'b', 3), 'bP': Piece('♟', 'b', 1)
+}
+
+# Generate wood texture
+def create_wood_texture(size, color1, color2):
+    texture = pygame.Surface(size)
+    texture.fill(color1)
+    for i in range(1000):
+        x = random.randint(0, size[0]-1)
+        y = random.randint(0, size[1]-1)
+        pygame.draw.line(texture, color2, (x, y), (x+random.randint(5, 20), y+random.randint(0, 2)), 1)
+    return texture
+
+# Create wood texture for the board
+wood_texture = create_wood_texture((WIDTH, HEIGHT), WOOD, DARK_WOOD)
+
+class ChessBoard:
+    def __init__(self):
+        self.reset_board()
+        self.animation = None
+        self.last_move = None
+        
+    def reset_board(self):
+        # Initialize the board with starting position
+        self.board = [
+            ['bR', 'bN', 'bB', 'bQ', 'bK', 'bB', 'bN', 'bR'],
+            ['bP', 'bP', 'bP', 'bP', 'bP', 'bP', 'bP', 'bP'],
+            ['', '', '', '', '', '', '', ''],
+            ['', '', '', '', '', '', '', ''],
+            ['', '', '', '', '', '', '', ''],
+            ['', '', '', '', '', '', '', ''],
+            ['wP', 'wP', 'wP', 'wP', 'wP', 'wP', 'wP', 'wP'],
+            ['wR', 'wN', 'wB', 'wQ', 'wK', 'wB', 'wN', 'wR']
+        ]
+        self.current_player = 'w'  # White starts
+        self.selected_piece = None
+        self.valid_moves = []
+        self.move_log = []
+        self.check = False
+        self.game_over = False
+        self.winner = None
+        self.promotion_square = None
+        self.animation = None
+        self.last_move = None
+        
+    def is_valid_move(self, start_pos, end_pos):
+        start_row, start_col = start_pos
+        end_row, end_col = end_pos
+        
+        # Check if there's a piece at the start position
+        if not self.board[start_row][start_col]:
+            return False
+            
+        # Check if the piece belongs to the current player
+        if self.board[start_row][start_col][0] != self.current_player:
+            return False
+            
+        # Check if the end position is occupied by the same color
+        if self.board[end_row][end_col] and self.board[end_row][end_col][0] == self.current_player:
+            return False
+            
+        # Simplified movement rules for each piece type
+        piece_type = self.board[start_row][start_col][1]
+        
+        if piece_type == 'P':  # Pawn
+            direction = -1 if self.current_player == 'w' else 1
+            # Move forward one square
+            if start_col == end_col and start_row + direction == end_row and not self.board[end_row][end_col]:
+                return True
+            # Move forward two squares from starting position
+            if ((start_row == 6 and self.current_player == 'w') or 
+                (start_row == 1 and self.current_player == 'b')) and \
+               start_col == end_col and start_row + 2*direction == end_row and \
+               not self.board[end_row][end_col] and not self.board[start_row + direction][start_col]:
+                return True
+            # Capture diagonally
+            if abs(start_col - end_col) == 1 and start_row + direction == end_row and \
+               self.board[end_row][end_col] and self.board[end_row][end_col][0] != self.current_player:
+                return True
+            # En passant (simplified)
+                
+        elif piece_type == 'R':  # Rook
+            if start_row == end_row or start_col == end_col:
+                return self.is_path_clear(start_pos, end_pos)
+                
+        elif piece_type == 'B':  # Bishop
+            if abs(start_row - end_row) == abs(start_col - end_col):
+                return self.is_path_clear(start_pos, end_pos)
+                
+        elif piece_type == 'Q':  # Queen
+            if (start_row == end_row or start_col == end_col or 
+                abs(start_row - end_row) == abs(start_col - end_col)):
+                return self.is_path_clear(start_pos, end_pos)
+                
+        elif piece_type == 'N':  # Knight
+            return (abs(start_row - end_row), abs(start_col - end_col)) in [(2, 1), (1, 2)]
+            
+        elif piece_type == 'K':  # King
+            # Regular move
+            if max(abs(start_row - end_row), abs(start_col - end_col)) == 1:
+                return True
+            # Castling (simplified)
+            if not self.board[start_row][start_col][2:] and abs(start_col - end_col) == 2 and start_row == end_row:
+                return self.can_castle(start_pos, end_pos)
+                
+        return False
+        
+    def can_castle(self, start_pos, end_pos):
+        start_row, start_col = start_pos
+        end_row, end_col = end_pos
+        
+        # King is in check
+        if self.is_in_check():
+            return False
+            
+        # Determine rook position and path
+        if end_col > start_col:  # Kingside
+            rook_col = 7
+            path = range(start_col + 1, rook_col)
+        else:  # Queenside
+            rook_col = 0
+            path = range(rook_col + 1, start_col)
+            
+        # Check if rook exists and hasn't moved
+        rook = self.board[start_row][rook_col]
+        if not rook or rook[1] != 'R' or rook[2:]:
+            return False
+            
+        # Check if path is clear and not under attack
+        for col in path:
+            if self.board[start_row][col]:
+                return False
+            # Check if square is under attack (simplified)
+            for r in range(8):
+                for c in range(8):
+                    if self.board[r][c] and self.board[r][c][0] != self.current_player:
+                        if self.is_valid_move((r, c), (start_row, col)):
+                            return False
+                            
+        return True
+        
+    def is_path_clear(self, start_pos, end_pos):
+        start_row, start_col = start_pos
+        end_row, end_col = end_pos
+        
+        row_step = 0 if start_row == end_row else (1 if end_row > start_row else -1)
+        col_step = 0 if start_col == end_col else (1 if end_col > start_col else -1)
+        
+        current_row, current_col = start_row + row_step, start_col + col_step
+        
+        while current_row != end_row or current_col != end_col:
+            if self.board[current_row][current_col]:
+                return False
+            current_row += row_step
+            current_col += col_step
+            
+        return True
+        
+    def make_move(self, start_pos, end_pos):
+        if self.is_valid_move(start_pos, end_pos):
+            start_row, start_col = start_pos
+            end_row, end_col = end_pos
+            
+            # Record the move
+            captured_piece = self.board[end_row][end_col]
+            moving_piece = self.board[start_row][start_col]
+            self.move_log.append((start_pos, end_pos, captured_piece))
+            self.last_move = (start_pos, end_pos)
+            
+            # Handle castling
+            if moving_piece[1] == 'K' and abs(start_col - end_col) == 2:
+                # Kingside castling
+                if end_col > start_col:
+                    # Move rook
+                    self.board[end_row][end_col-1] = self.board[end_row][7]
+                    self.board[end_row][7] = ''
+                # Queenside castling
+                else:
+                    # Move rook
+                    self.board[end_row][end_col+1] = self.board[end_row][0]
+                    self.board[end_row][0] = ''
+            
+            # Create animation
+            self.animation = {
+                'piece': moving_piece,
+                'start': start_pos,
+                'end': end_pos,
+                'progress': 0,
+                'duration': 0.3  # seconds
+            }
+            
+            # Move the piece
+            self.board[end_row][end_col] = moving_piece + 'm'  # Mark as moved
+            self.board[start_row][start_col] = ''
+            
+            # Check for pawn promotion
+            if moving_piece[1] == 'P' and (end_row == 0 or end_row == 7):
+                self.promotion_square = end_pos
+                return True
+                
+            # Check for check condition
+            self.check = self.is_in_check()
+            
+            # Check for game over
+            if self.is_checkmate():
+                self.game_over = True
+                self.winner = 'b' if self.current_player == 'w' else 'w'
+            elif self.is_stalemate():
+                self.game_over = True
+                self.winner = None
+            
+            # Switch player
+            self.current_player = 'b' if self.current_player == 'w' else 'w'
+            return True
+        return False
+        
+    def promote_pawn(self, piece_type):
+        if not self.promotion_square:
+            return False
+            
+        row, col = self.promotion_square
+        color = self.board[row][col][0]
+        self.board[row][col] = color + piece_type + 'm'  # Mark as moved
+        
+        # Check for check condition
+        self.check = self.is_in_check()
+        
+        # Check for game over
+        if self.is_checkmate():
+            self.game_over = True
+            self.winner = 'b' if self.current_player == 'w' else 'w'
+        elif self.is_stalemate():
+            self.game_over = True
+            self.winner = None
+        
+        # Switch player
+        self.current_player = 'b' if self.current_player == 'w' else 'w'
+        self.promotion_square = None
+        return True
+        
+    def is_in_check(self):
+        # Find the king's position
+        king_pos = None
+        for row in range(8):
+            for col in range(8):
+                if self.board[row][col] and self.board[row][col][0] == self.current_player and self.board[row][col][1] == 'K':
+                    king_pos = (row, col)
+                    break
+            if king_pos:
+                break
+                
+        if not king_pos:
+            return False
+            
+        # Check if any opponent piece can capture the king
+        opponent = 'b' if self.current_player == 'w' else 'w'
+        for row in range(8):
+            for col in range(8):
+                if self.board[row][col] and self.board[row][col][0] == opponent:
+                    if self.is_valid_move((row, col), king_pos):
+                        return True
+        return False
+        
+    def is_checkmate(self):
+        if not self.check:
+            return False
+            
+        # If the king is in check and has no valid moves
+        for row in range(8):
+            for col in range(8):
+                if self.board[row][col] and self.board[row][col][0] == self.current_player:
+                    for move in self.get_valid_moves((row, col)):
+                        # Try the move
+                        start_pos = (row, col)
+                        end_pos = move
+                        captured_piece = self.board[end_pos[0]][end_pos[1]]
+                        moving_piece = self.board[start_pos[0]][start_pos[1]]
+                        self.board[end_pos[0]][end_pos[1]] = moving_piece
+                        self.board[start_pos[0]][start_pos[1]] = ''
+                        
+                        # Check if still in check
+                        still_in_check = self.is_in_check()
+                        
+                        # Undo the move
+                        self.board[start_pos[0]][start_pos[1]] = moving_piece
+                        self.board[end_pos[0]][end_pos[1]] = captured_piece
+                        
+                        if not still_in_check:
+                            return False
+        return True
+        
+    def is_stalemate(self):
+        if self.check:
+            return False
+            
+        # If the player has no legal moves but is not in check
+        for row in range(8):
+            for col in range(8):
+                if self.board[row][col] and self.board[row][col][0] == self.current_player:
+                    if self.get_valid_moves((row, col)):
+                        return False
+        return True
+        
+    def get_valid_moves(self, position):
+        row, col = position
+        valid_moves = []
+        
+        if not self.board[row][col] or self.board[row][col][0] != self.current_player:
+            return valid_moves
+            
+        for r in range(8):
+            for c in range(8):
+                if self.is_valid_move(position, (r, c)):
+                    # Check if move would put or leave king in check
+                    start_pos = position
+                    end_pos = (r, c)
+                    captured_piece = self.board[end_pos[0]][end_pos[1]]
+                    moving_piece = self.board[start_pos[0]][start_pos[1]]
+                    self.board[end_pos[0]][end_pos[1]] = moving_piece
+                    self.board[start_pos[0]][start_pos[1]] = ''
+                    
+                    # Check if still in check
+                    still_in_check = self.is_in_check()
+                    
+                    # Undo the move
+                    self.board[start_pos[0]][start_pos[1]] = moving_piece
+                    self.board[end_pos[0]][end_pos[1]] = captured_piece
+                    
+                    if not still_in_check:
+                        valid_moves.append((r, c))
+                    
+        return valid_moves
+        
+    def evaluate_board(self):
+        # Evaluation function for the AI
+        score = 0
+        
+        # Material value
+        for row in range(8):
+            for col in range(8):
+                piece = self.board[row][col]
+                if piece:
+                    value = pieces[piece[:2]].value
+                    if piece[0] == 'w':
+                        score += value
+                    else:
+                        score -= value
+                        
+        # Positional bonuses
+        # Center control bonus
+        center_squares = [(3, 3), (3, 4), (4, 3), (4, 4)]
+        for row, col in center_squares:
+            piece = self.board[row][col]
+            if piece:
+                if piece[0] == 'w':
+                    score += 0.1
+                else:
+                    score -= 0.1
+                    
+        # Development bonus (pieces not on starting squares)
+        for row in [0, 1, 6, 7]:
+            for col in range(8):
+                piece = self.board[row][col]
+                if piece and ((piece[0] == 'w' and row in [6, 7]) or (piece[0] == 'b' and row in [0, 1])):
+                    if piece[1] != 'P':  # Not a pawn
+                        if piece[0] == 'w':
+                            score += 0.05
+                        else:
+                            score -= 0.05
+                            
+        # King safety (penalize exposed kings)
+        for row in range(8):
+            for col in range(8):
+                piece = self.board[row][col]
+                if piece and piece[1] == 'K':
+                    # Count number of squares around king that are attacked
+                    safety_score = 0
+                    for r in range(max(0, row-1), min(8, row+2)):
+                        for c in range(max(0, col-1), min(8, col+2)):
+                            if r == row and c == col:
+                                continue
+                            # Check if square is attacked (simplified)
+                            for r2 in range(8):
+                                for c2 in range(8):
+                                    if self.board[r2][c2] and self.board[r2][c2][0] != piece[0]:
+                                        if self.is_valid_move((r2, c2), (r, c)):
+                                            safety_score -= 0.1
+                    if piece[0] == 'w':
+                        score += safety_score
+                    else:
+                        score -= safety_score
+                            
+        return score
+        
+    def minimax(self, depth, alpha, beta, maximizing_player):
+        if depth == 0 or self.game_over:
+            return self.evaluate_board(), None
+            
+        if maximizing_player:
+            max_eval = float('-inf')
+            best_move = None
+            
+            for move in self.get_all_moves('w'):
+                # Make move
+                start_pos, end_pos = move
+                captured_piece = self.board[end_pos[0]][end_pos[1]]
+                moving_piece = self.board[start_pos[0]][start_pos[1]]
+                self.board[end_pos[0]][end_pos[1]] = moving_piece
+                self.board[start_pos[0]][start_pos[1]] = ''
+                
+                # Switch player temporarily for check detection
+                original_player = self.current_player
+                self.current_player = 'b'
+                
+                eval_score, _ = self.minimax(depth - 1, alpha, beta, False)
+                
+                # Undo move
+                self.board[start_pos[0]][start_pos[1]] = moving_piece
+                self.board[end_pos[0]][end_pos[1]] = captured_piece
+                self.current_player = original_player
+                
+                if eval_score > max_eval:
+                    max_eval = eval_score
+                    best_move = move
+                    
+                alpha = max(alpha, eval_score)
+                if beta <= alpha:
+                    break
+                    
+            return max_eval, best_move
+            
+        else:
+            min_eval = float('inf')
+            best_move = None
+            
+            for move in self.get_all_moves('b'):
+                # Make move
+                start_pos, end_pos = move
+                captured_piece = self.board[end_pos[0]][end_pos[1]]
+                moving_piece = self.board[start_pos[0]][start_pos[1]]
+                self.board[end_pos[0]][end_pos[1]] = moving_piece
+                self.board[start_pos[0]][start_pos[1]] = ''
+                
+                # Switch player temporarily for check detection
+                original_player = self.current_player
+                self.current_player = 'w'
+                
+                eval_score, _ = self.minimax(depth - 1, alpha, beta, True)
+                
+                # Undo move
+                self.board[start_pos[0]][start_pos[1]] = moving_piece
+                self.board[end_pos[0]][end_pos[1]] = captured_piece
+                self.current_player = original_player
+                
+                if eval_score < min_eval:
+                    min_eval = eval_score
+                    best_move = move
+                    
+                beta = min(beta, eval_score)
+                if beta <= alpha:
+                    break
+                    
+            return min_eval, best_move
+            
+    def get_all_moves(self, player):
+        moves = []
+        
+        for start_row in range(8):
+            for start_col in range(8):
+                if self.board[start_row][start_col] and self.board[start_row][start_col][0] == player:
+                    valid_moves = self.get_valid_moves((start_row, start_col))
+                    for end_pos in valid_moves:
+                        moves.append(((start_row, start_col), end_pos))
+        return moves
+        
+    def ai_move(self):
+        _, best_move = self.minimax(3, float('-inf'), float('inf'), self.current_player == 'w')
+        
+        if best_move:
+            self.make_move(best_move[0], best_move[1])
+            return True
+        return False
+
+def draw_board(chess_board):
+    # Draw wood background
+    screen.blit(wood_texture, (0, 0))
+    
+    # Draw the chess board with a nice border
+    board_rect = pygame.Rect((WIDTH - BOARD_SIZE) // 2 - 15, 50, BOARD_SIZE + 30, BOARD_SIZE + 30)
+    pygame.draw.rect(screen, DARK_WOOD, board_rect, border_radius=10)
+    pygame.draw.rect(screen, WOOD, board_rect.inflate(-4, -4), border_radius=8)
+    
+    # Draw coordinates
+    font_small = pygame.font.SysFont('Arial', 14, bold=True)
+    for i in range(8):
+        # File letters (a-h)
+        letter = chr(97 + i)  # a, b, c, ...
+        text = font_small.render(letter, True, WHITE)
+        screen.blit(text, ((WIDTH - BOARD_SIZE) // 2 + i * SQUARE_SIZE + SQUARE_SIZE // 2 - text.get_width() // 2, 
+                          BOARD_SIZE + 60))
+        # Rank numbers (1-8)
+        number = str(8 - i)
+        text = font_small.render(number, True, WHITE)
+        screen.blit(text, ((WIDTH - BOARD_SIZE) // 2 - 25, 
+                          50 + i * SQUARE_SIZE + SQUARE_SIZE // 2 - text.get_height() // 2))
+    
+    # Draw the squares and pieces
+    for row in range(8):
+        for col in range(8):
+            x = (WIDTH - BOARD_SIZE) // 2 + col * SQUARE_SIZE
+            y = 50 + row * SQUARE_SIZE
+            
+            # Draw square
+            color = LIGHT_SQUARE if (row + col) % 2 == 0 else DARK_SQUARE
+            pygame.draw.rect(screen, color, (x, y, SQUARE_SIZE, SQUARE_SIZE))
+            
+            # Highlight last move
+            if chess_board.last_move:
+                start, end = chess_board.last_move
+                if (row, col) == start or (row, col) == end:
+                    s = pygame.Surface((SQUARE_SIZE, SQUARE_SIZE), pygame.SRCALPHA)
+                    s.fill((255, 255, 0, 60))
+                    screen.blit(s, (x, y))
+            
+            # Draw piece (if not being animated)
+            piece = chess_board.board[row][col]
+            if piece and (not chess_board.animation or (row, col) != chess_board.animation['start']):
+                draw_piece(piece, x, y)
+            
+    # Draw animated piece
+    if chess_board.animation:
+        start_row, start_col = chess_board.animation['start']
+        end_row, end_col = chess_board.animation['end']
+        
+        start_x = (WIDTH - BOARD_SIZE) // 2 + start_col * SQUARE_SIZE
+        start_y = 50 + start_row * SQUARE_SIZE
+        end_x = (WIDTH - BOARD_SIZE) // 2 + end_col * SQUARE_SIZE
+        end_y = 50 + end_row * SQUARE_SIZE
+        
+        progress = chess_board.animation['progress']
+        x = start_x + (end_x - start_x) * progress
+        y = start_y + (end_y - start_y) * progress
+        
+        draw_piece(chess_board.animation['piece'], x, y)
+            
+    # Highlight selected piece
+    if chess_board.selected_piece:
+        row, col = chess_board.selected_piece
+        x = (WIDTH - BOARD_SIZE) // 2 + col * SQUARE_SIZE
+        y = 50 + row * SQUARE_SIZE
+        pygame.draw.rect(screen, HIGHLIGHT, (x, y, SQUARE_SIZE, SQUARE_SIZE), 4)
+        
+        # Highlight valid moves
+        for move in chess_board.valid_moves:
+            row, col = move
+            x = (WIDTH - BOARD_SIZE) // 2 + col * SQUARE_SIZE
+            y = 50 + row * SQUARE_SIZE
+            pygame.draw.circle(screen, MOVE_HIGHLIGHT, 
+                              (x + SQUARE_SIZE // 2, y + SQUARE_SIZE // 2), 
+                              SQUARE_SIZE // 5)
+            
+    # Draw side panel
+    panel_rect = pygame.Rect(WIDTH - 220, 50, 200, BOARD_SIZE)
+    pygame.draw.rect(screen, DARK_WOOD, panel_rect, border_radius=10)
+    pygame.draw.rect(screen, WOOD, panel_rect.inflate(-4, -4), border_radius=8)
+    
+    # Draw game info
+    font = pygame.font.SysFont('Arial', 24, bold=True)
+    title = font.render("CHESS AI", True, GOLD)
+    screen.blit(title, (WIDTH - 210, 60))
+    
+    # Draw current player indicator
+    font = pygame.font.SysFont('Arial', 20)
+    player_text = "Your Turn (White)" if chess_board.current_player == 'w' else "AI Thinking (Black)"
+    text = font.render(player_text, True, WHITE)
+    screen.blit(text, (WIDTH - 210, 100))
+    
+    # Draw check indicator
+    if chess_board.check:
+        check_text = font.render("CHECK!", True, (255, 100, 100))
+        screen.blit(check_text, (WIDTH - 210, 130))
+    
+    # Draw move log
+    log_title = font.render("Move History:", True, GOLD)
+    screen.blit(log_title, (WIDTH - 210, 160))
+    
+    font = pygame.font.SysFont('Arial', 16)
+    for i, move in enumerate(chess_board.move_log[-8:]):  # Show last 8 moves
+        start_pos, end_pos, captured = move
+        start_row, start_col = start_pos
+        end_row, end_col = end_pos
+        
+        # Convert to algebraic notation
+        piece = chess_board.board[end_row][end_col]
+        if not piece:  # Shouldn't happen, but just in case
+            continue
+            
+        piece_symbol = pieces[piece[:2]].symbol if piece[1] != 'P' else ''
+        start_square = chr(97 + start_col) + str(8 - start_row)
+        end_square = chr(97 + end_col) + str(8 - end_row)
+        capture_symbol = "x" if captured else ""
+        
+        move_text = f"{i+1}. {piece_symbol}{start_square}{capture_symbol}{end_square}"
+        text = font.render(move_text, True, WHITE)
+        screen.blit(text, (WIDTH - 210, 190 + i * 25))
+    
+    # Draw reset button
+    button_rect = pygame.Rect(WIDTH - 210, BOARD_SIZE - 20, 180, 40)
+    pygame.draw.rect(screen, DARK_BLUE, button_rect, border_radius=6)
+    pygame.draw.rect(screen, BLUE, button_rect.inflate(-4, -4), border_radius=4)
+    font = pygame.font.SysFont('Arial', 20, bold=True)
+    text = font.render("New Game", True, WHITE)
+    screen.blit(text, (button_rect.centerx - text.get_width() // 2, 
+                      button_rect.centery - text.get_height() // 2))
+    
+    # Draw pawn promotion UI if needed
+    if chess_board.promotion_square:
+        row, col = chess_board.promotion_square
+        x = (WIDTH - BOARD_SIZE) // 2 + col * SQUARE_SIZE
+        y = 50 + row * SQUARE_SIZE
+        
+        # Draw promotion options
+        options = ['Q', 'R', 'B', 'N']
+        for i, option in enumerate(options):
+            option_rect = pygame.Rect(x, y - i * SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE)
+            pygame.draw.rect(screen, LIGHT_GRAY, option_rect)
+            pygame.draw.rect(screen, DARK_GRAY, option_rect, 2)
+            
+            piece_color = 'w' if chess_board.current_player == 'w' else 'b'
+            piece_code = piece_color + option
+            draw_piece(piece_code, x, y - i * SQUARE_SIZE)
+    
+    # Draw game over message
+    if chess_board.game_over:
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        screen.blit(overlay, (0, 0))
+        
+        font = pygame.font.SysFont('Arial', 48, bold=True)
+        if chess_board.winner:
+            text = font.render(f"{'White' if chess_board.winner == 'w' else 'Black'} Wins!", True, GOLD)
+        else:
+            text = font.render("Stalemate!", True, GOLD)
+        
+        screen.blit(text, (WIDTH // 2 - text.get_width() // 2, HEIGHT // 2 - 50))
+        
+        font = pygame.font.SysFont('Arial', 24)
+        text = font.render("Click 'New Game' to play again", True, WHITE)
+        screen.blit(text, (WIDTH // 2 - text.get_width() // 2, HEIGHT // 2 + 20))
+
+def draw_piece(piece_code, x, y):
+    if not piece_code:
+        return
+        
+    piece = pieces.get(piece_code[:2])
+    if not piece:
+        return
+        
+    font = pygame.font.SysFont('Arial', 48)
+    text_color = WHITE if piece.color == 'w' else BLACK
+    
+    # Draw piece shadow
+    shadow = font.render(piece.symbol, True, (50, 50, 50, 150))
+    screen.blit(shadow, (x + SQUARE_SIZE // 2 - shadow.get_width() // 2 + 2, 
+                        y + SQUARE_SIZE // 2 - shadow.get_height() // 2 + 2))
+    
+    # Draw piece
+    text = font.render(piece.symbol, True, text_color)
+    screen.blit(text, (x + SQUARE_SIZE // 2 - text.get_width() // 2, 
+                      y + SQUARE_SIZE // 2 - text.get_height() // 2))
+
+def main():
+    chess_board = ChessBoard()
+    ai_thinking = False
+    last_ai_move_time = 0
+    last_time = time.time()
+    
+    while True:
+        current_time = time.time()
+        dt = current_time - last_time
+        last_time = current_time
+        
+        # Update animation
+        if chess_board.animation:
+            chess_board.animation['progress'] += dt / chess_board.animation['duration']
+            if chess_board.animation['progress'] >= 1:
+                chess_board.animation = None
+        
+        for event in pygame.event.get():
+            if event.type == QUIT:
+                pygame.quit()
+                sys.exit()
+                
+            if event.type == MOUSEBUTTONDOWN and event.button == 1 and not chess_board.game_over:
+                x, y = event.pos
+                
+                # Check if reset button was clicked
+                button_rect = pygame.Rect(WIDTH - 210, BOARD_SIZE - 20, 180, 40)
+                if button_rect.collidepoint(x, y):
+                    chess_board.reset_board()
+                    continue
+                
+                # Handle pawn promotion
+                if chess_board.promotion_square:
+                    row, col = chess_board.promotion_square
+                    promo_x = (WIDTH - BOARD_SIZE) // 2 + col * SQUARE_SIZE
+                    promo_y = 50 + row * SQUARE_SIZE
+                    
+                    options = ['Q', 'R', 'B', 'N']
+                    for i, option in enumerate(options):
+                        option_rect = pygame.Rect(promo_x, promo_y - i * SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE)
+                        if option_rect.collidepoint(x, y):
+                            chess_board.promote_pawn(option)
+                            break
+                    continue
+                
+                # Only allow moves if it's the player's turn and no animation is playing
+                if chess_board.current_player == 'w' and not ai_thinking and not chess_board.animation:
+                    # Convert screen coordinates to board coordinates
+                    board_x = x - (WIDTH - BOARD_SIZE) // 2
+                    board_y = y - 50
+                    
+                    if 0 <= board_x < BOARD_SIZE and 0 <= board_y < BOARD_SIZE:
+                        col = board_x // SQUARE_SIZE
+                        row = board_y // SQUARE_SIZE
+                        
+                        if chess_board.selected_piece:
+                            # Try to move the selected piece
+                            if chess_board.make_move(chess_board.selected_piece, (row, col)):
+                                chess_board.selected_piece = None
+                                chess_board.valid_moves = []
+                                ai_thinking = True  # AI's turn next
+                                last_ai_move_time = time.time()
+                            else:
+                                # Select a new piece
+                                chess_board.selected_piece = (row, col)
+                                chess_board.valid_moves = chess_board.get_valid_moves((row, col))
+                        else:
+                            # Select a piece
+                            chess_board.selected_piece = (row, col)
+                            chess_board.valid_moves = chess_board.get_valid_moves((row, col))
+        
+        # AI's turn - add a delay to make it seem like it's thinking
+        if chess_board.current_player == 'b' and ai_thinking and not chess_board.game_over and not chess_board.animation:
+            current_time = time.time()
+            if current_time - last_ai_move_time > 0.5:  # Wait 0.5 seconds before moving
+                if chess_board.ai_move():
+                    ai_thinking = False
+                
+        # Draw everything
+        screen.fill(WHITE)
+        
+        # Draw wood background
+        screen.blit(wood_texture, (0, 0))
+        
+        # Draw board and pieces
+        draw_board(chess_board)
+        
+        pygame.display.flip()
+        clock.tick(FPS)
+
+if __name__ == "__main__":
+    main()
