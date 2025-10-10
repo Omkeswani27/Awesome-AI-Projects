@@ -1,0 +1,1165 @@
+# enhanced_fake_news_detector.py
+import pandas as pd
+import numpy as np
+import re
+import nltk
+import requests
+import json
+from collections import Counter
+from datetime import datetime
+import time
+import warnings
+warnings.filterwarnings('ignore')
+
+# Text processing libraries
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer, PorterStemmer
+from nltk.tokenize import word_tokenize, sent_tokenize
+from nltk.sentiment import SentimentIntensityAnalyzer
+from textstat import flesch_reading_ease, syllable_count
+
+# Machine Learning libraries
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV, StratifiedKFold
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier, GradientBoostingClassifier, AdaBoostClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.metrics import (accuracy_score, classification_report, confusion_matrix, 
+                           precision_recall_curve, roc_auc_score, roc_curve)
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.decomposition import LatentDirichletAllocation, TruncatedSVD
+from sklearn.cluster import KMeans
+from sklearn.neural_network import MLPClassifier
+
+# Deep Learning libraries
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import Dense, Dropout, LSTM, Embedding, Conv1D, GlobalMaxPooling1D
+    from tensorflow.keras.preprocessing.text import Tokenizer
+    from tensorflow.keras.preprocessing.sequence import pad_sequences
+    TF_AVAILABLE = True
+except ImportError:
+    TF_AVAILABLE = False
+    print("TensorFlow not available. Deep learning features disabled.")
+
+# Visualization libraries
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import wordcloud
+from wordcloud import WordCloud
+
+# Model persistence
+import joblib
+import pickle
+
+# Download required NLTK data
+try:
+    nltk.download('punkt')
+    nltk.download('stopwords')
+    nltk.download('wordnet')
+    nltk.download('omw-1.4')
+    nltk.download('vader_lexicon')
+except:
+    print("NLTK downloads completed or already available")
+
+class AdvancedTextPreprocessor:
+    def __init__(self):
+        self.stop_words = set(stopwords.words('english'))
+        self.lemmatizer = WordNetLemmatizer()
+        self.stemmer = PorterStemmer()
+        self.sia = SentimentIntensityAnalyzer()
+        
+        # Enhanced stop words with common fake news indicators
+        self.fake_indicators = {
+            'shocking', 'breaking', 'urgent', 'secret', 'hidden', 'conspiracy',
+            'they dont want you to know', 'big pharma', 'government coverup',
+            'miracle', 'instant', 'guaranteed', 'proven', 'amazing', 'unbelievable',
+            'secret', 'hidden truth', 'exposed', 'leaked', 'whistleblower'
+        }
+        self.stop_words.update(self.fake_indicators)
+        
+    def clean_text(self, text):
+        """Advanced text cleaning and preprocessing"""
+        if pd.isna(text):
+            return ""
+        
+        text = str(text).lower()
+        
+        # Remove URLs, emails, and social media handles
+        text = re.sub(r'http\S+', '', text)
+        text = re.sub(r'@\w+', '', text)
+        text = re.sub(r'#\w+', '', text)
+        text = re.sub(r'\S+@\S+', '', text)
+        
+        # Remove special characters but keep basic punctuation for sentiment
+        text = re.sub(r'[^\w\s.!?]', '', text)
+        
+        # Remove extra whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        return text
+    
+    def tokenize_and_process(self, text, method='lemmatize'):
+        """Tokenize and process text with choice of lemmatization or stemming"""
+        tokens = word_tokenize(text)
+        
+        if method == 'lemmatize':
+            processed = [self.lemmatizer.lemmatize(token) for token in tokens 
+                        if token not in self.stop_words and len(token) > 2 and token.isalpha()]
+        else:
+            processed = [self.stemmer.stem(token) for token in tokens 
+                        if token not in self.stop_words and len(token) > 2 and token.isalpha()]
+        
+        return processed
+    
+    def extract_advanced_features(self, text):
+        """Extract comprehensive text features"""
+        cleaned_text = self.clean_text(text)
+        tokens = self.tokenize_and_process(cleaned_text)
+        sentences = sent_tokenize(cleaned_text)
+        
+        # Basic statistics
+        word_count = len(tokens)
+        char_count = len(cleaned_text)
+        sentence_count = len(sentences)
+        avg_sentence_length = word_count / sentence_count if sentence_count > 0 else 0
+        avg_word_length = sum(len(word) for word in tokens) / word_count if word_count > 0 else 0
+        
+        # Readability scores
+        readability = flesch_reading_ease(cleaned_text) if cleaned_text else 0
+        
+        # Sentiment analysis
+        sentiment = self.sia.polarity_scores(cleaned_text)
+        
+        # Linguistic features
+        uppercase_ratio = sum(1 for c in text if c.isupper()) / len(text) if text else 0
+        exclamation_ratio = text.count('!') / len(text) if text else 0
+        question_ratio = text.count('?') / len(text) if text else 0
+        digit_ratio = sum(1 for c in text if c.isdigit()) / len(text) if text else 0
+        
+        # Content quality indicators
+        unique_word_ratio = len(set(tokens)) / word_count if word_count > 0 else 0
+        long_word_ratio = sum(1 for word in tokens if len(word) > 6) / word_count if word_count > 0 else 0
+        
+        # Fake news indicators
+        fake_keyword_count = sum(1 for word in tokens if word in self.fake_indicators)
+        sensational_score = (exclamation_ratio * 10) + (uppercase_ratio * 5) + (fake_keyword_count / word_count * 100 if word_count > 0 else 0)
+        
+        features = {
+            # Basic metrics
+            'word_count': word_count,
+            'char_count': char_count,
+            'sentence_count': sentence_count,
+            'avg_sentence_length': avg_sentence_length,
+            'avg_word_length': avg_word_length,
+            
+            # Readability
+            'readability_score': readability,
+            
+            # Sentiment
+            'sentiment_compound': sentiment['compound'],
+            'sentiment_positive': sentiment['pos'],
+            'sentiment_negative': sentiment['neg'],
+            'sentiment_neutral': sentiment['neu'],
+            
+            # Linguistic features
+            'uppercase_ratio': uppercase_ratio,
+            'exclamation_ratio': exclamation_ratio,
+            'question_ratio': question_ratio,
+            'digit_ratio': digit_ratio,
+            
+            # Content quality
+            'unique_word_ratio': unique_word_ratio,
+            'long_word_ratio': long_word_ratio,
+            'vocabulary_richness': unique_word_ratio,
+            
+            # Fake news indicators
+            'fake_keyword_count': fake_keyword_count,
+            'sensational_score': sensational_score,
+            'clickbait_score': min((exclamation_ratio * 20 + question_ratio * 10 + uppercase_ratio * 15), 100)
+        }
+        
+        return features
+
+class AdvancedFeatureEngineer:
+    def __init__(self, max_features=5000, n_components=20, max_seq_length=100):
+        self.tfidf_vectorizer = TfidfVectorizer(
+            max_features=max_features,
+            ngram_range=(1, 3),
+            stop_words='english',
+            min_df=2,
+            max_df=0.8
+        )
+        self.count_vectorizer = CountVectorizer(
+            max_features=2000,
+            ngram_range=(1, 2),
+            stop_words='english'
+        )
+        self.lda = LatentDirichletAllocation(
+            n_components=n_components,
+            random_state=42,
+            learning_method='online'
+        )
+        self.svd = TruncatedSVD(n_components=50, random_state=42)
+        self.scaler = StandardScaler()
+        
+        # Deep learning components
+        self.tokenizer = Tokenizer(num_words=5000, oov_token='<OOV>') if TF_AVAILABLE else None
+        self.max_seq_length = max_seq_length
+        
+        self.is_fitted = False
+        
+    def create_tfidf_features(self, texts):
+        """Create enhanced TF-IDF features"""
+        if not self.is_fitted:
+            features = self.tfidf_vectorizer.fit_transform(texts)
+        else:
+            features = self.tfidf_vectorizer.transform(texts)
+        return features
+    
+    def create_svd_features(self, texts):
+        """Create SVD reduced features"""
+        tfidf_features = self.create_tfidf_features(texts)
+        return self.svd.fit_transform(tfidf_features)
+    
+    def create_lda_features(self, texts):
+        """Create LDA topic modeling features"""
+        count_features = self.count_vectorizer.fit_transform(texts)
+        return self.lda.fit_transform(count_features)
+    
+    def create_sequence_features(self, texts):
+        """Create sequences for deep learning"""
+        if not TF_AVAILABLE:
+            return None
+            
+        if not self.is_fitted:
+            self.tokenizer.fit_on_texts(texts)
+            
+        sequences = self.tokenizer.texts_to_sequences(texts)
+        padded_sequences = pad_sequences(sequences, maxlen=self.max_seq_length, padding='post', truncating='post')
+        return padded_sequences
+    
+    def create_advanced_features(self, texts, metadata_features=None):
+        """Create comprehensive feature set"""
+        print("Creating advanced features...")
+        
+        # Text features
+        tfidf_features = self.create_tfidf_features(texts)
+        svd_features = self.create_svd_features(texts)
+        lda_features = self.create_lda_features(texts)
+        
+        # Convert to dense arrays
+        tfidf_dense = tfidf_features.toarray()
+        
+        # Combine features
+        text_combined = np.hstack([tfidf_dense, svd_features, lda_features])
+        
+        if metadata_features is not None:
+            combined_features = np.hstack([text_combined, metadata_features])
+        else:
+            combined_features = text_combined
+        
+        # Scale features
+        if not self.is_fitted:
+            combined_features = self.scaler.fit_transform(combined_features)
+            self.is_fitted = True
+        else:
+            combined_features = self.scaler.transform(combined_features)
+        
+        print(f"Advanced features shape: {combined_features.shape}")
+        return combined_features
+    
+    def fit(self, texts):
+        """Fit all vectorizers"""
+        _ = self.create_advanced_features(texts)
+        if TF_AVAILABLE:
+            _ = self.create_sequence_features(texts)
+        self.is_fitted = True
+
+class DeepLearningModel:
+    def __init__(self, vocab_size=5000, embedding_dim=100, max_length=100):
+        if not TF_AVAILABLE:
+            raise ImportError("TensorFlow is required for deep learning features")
+            
+        self.vocab_size = vocab_size
+        self.embedding_dim = embedding_dim
+        self.max_length = max_length
+        self.model = None
+        
+    def build_lstm_model(self):
+        """Build LSTM model for text classification"""
+        self.model = Sequential([
+            Embedding(self.vocab_size, self.embedding_dim, input_length=self.max_length),
+            LSTM(128, dropout=0.2, recurrent_dropout=0.2, return_sequences=True),
+            LSTM(64, dropout=0.2, recurrent_dropout=0.2),
+            Dense(64, activation='relu'),
+            Dropout(0.5),
+            Dense(32, activation='relu'),
+            Dropout(0.3),
+            Dense(1, activation='sigmoid')
+        ])
+        
+        self.model.compile(
+            optimizer='adam',
+            loss='binary_crossentropy',
+            metrics=['accuracy', 'precision', 'recall']
+        )
+        
+        return self.model
+    
+    def build_cnn_model(self):
+        """Build CNN model for text classification"""
+        self.model = Sequential([
+            Embedding(self.vocab_size, self.embedding_dim, input_length=self.max_length),
+            Conv1D(128, 5, activation='relu'),
+            GlobalMaxPooling1D(),
+            Dense(128, activation='relu'),
+            Dropout(0.5),
+            Dense(64, activation='relu'),
+            Dropout(0.3),
+            Dense(1, activation='sigmoid')
+        ])
+        
+        self.model.compile(
+            optimizer='adam',
+            loss='binary_crossentropy',
+            metrics=['accuracy', 'precision', 'recall']
+        )
+        
+        return self.model
+
+class EnhancedFakeNewsDetector:
+    def __init__(self, use_deep_learning=True):
+        self.preprocessor = AdvancedTextPreprocessor()
+        self.feature_engineer = AdvancedFeatureEngineer()
+        self.use_deep_learning = use_deep_learning and TF_AVAILABLE
+        
+        if self.use_deep_learning:
+            self.dl_model = DeepLearningModel()
+        
+        self.models = {}
+        self.best_model = None
+        self.is_trained = False
+        self.training_history = None
+        self.feature_importance = None
+        
+        # Visualization settings
+        plt.style.use('default')
+        sns.set_palette("husl")
+        
+    def create_comprehensive_dataset(self):
+        """Create a realistic and comprehensive dataset"""
+        real_news = [
+            "The International Monetary Fund released its quarterly report showing steady economic growth across developed nations, with particular strength in technology sectors. The analysis indicates stable inflation rates and positive employment trends for the coming year.",
+            "Researchers at Stanford University published a groundbreaking study in Nature Medicine demonstrating the efficacy of a new immunotherapy approach for treating advanced cancers. The clinical trials showed promising results with minimal side effects reported.",
+            "European Union leaders reached a comprehensive agreement on climate policy, setting ambitious targets for carbon neutrality by 2040. The plan includes substantial investments in renewable energy infrastructure and green technology development.",
+            "NASA's Perseverance rover discovered compelling geological evidence of ancient water systems on Mars, providing new insights into the planet's potential for supporting microbial life in its distant past.",
+            "The World Health Organization announced successful containment of a recent infectious disease outbreak through coordinated international response efforts and advanced contact tracing technologies.",
+            "Major automotive manufacturers unveiled plans to transition completely to electric vehicle production by 2035, citing technological advancements and changing consumer preferences driving the shift toward sustainable transportation.",
+            "Educational researchers from Harvard conducted a longitudinal study revealing significant improvements in student outcomes following implementation of project-based learning methodologies in K-12 curricula across multiple school districts.",
+            "Global food security initiatives reported substantial progress in developing drought-resistant crop varieties, with field tests showing increased yields in arid regions facing climate change challenges.",
+            "Renewable energy production reached record levels this quarter, accounting for over 40% of total electricity generation in several European countries according to energy regulatory agencies.",
+            "Medical researchers identified new genetic markers associated with longevity, opening potential avenues for targeted interventions and personalized medicine approaches to age-related diseases."
+        ]
+        
+        fake_news = [
+            "SHOCKING BREAKTHROUGH: Doctors HATE this one simple trick that completely ELIMINATES diabetes in just 3 days! Big Pharma is trying to SUPPRESS this information to keep selling their expensive medications!",
+            "URGENT WARNING: Government secretly implanting tracking microchips in COVID vaccines - whistleblower reveals terrifying truth they don't want you to know! Millions already affected!",
+            "MIRACLE CURE DISCOVERED: This ancient herb DESTROYS cancer cells instantly! Medical establishment hiding the truth because they can't profit from natural remedies! MUST SHARE!",
+            "ALIEN CONTACT CONFIRMED: NASA insiders reveal secret meetings with extraterrestrial beings! Government covering up existence of advanced alien technology that could solve energy crisis!",
+            "CELEBRITY SECRET EXPOSED: This Hollywood star's weird bedtime ritual burns belly fat overnight! Personal trainers furious about this simple method that requires NO exercise!",
+            "CONSPIRACY UNCOVERED: Global elite using 5G towers to control population through mind control frequencies! Wake up sheeple before it's too late! The evidence is everywhere!",
+            "FINANCIAL WIZARD REVEALS: Make $10,000 weekly with this secret cryptocurrency loophole! Banks hate him for sharing this forbidden knowledge that makes traditional investing obsolete!",
+            "SCIENTIFIC PROOF: Moon landing was FAKED in Hollywood studio! New analysis of Apollo footage reveals impossible shadows and other undeniable evidence of massive government deception!",
+            "MIRACLE SUPPLEMENT: This one vitamin COMPLETELY reverses aging! Doctors stunned by before-and-after results! Pharmaceutical companies trying to ban it to protect their profits!",
+            "END TIMES PREDICTION: Famous psychic accurately predicts major earthquake that will destroy California next month! Government knows but isn't warning people! Stock up on supplies NOW!"
+        ]
+        
+        data = {
+            'text': real_news + fake_news,
+            'title': [f"Economic Report Shows Steady Growth Q{i+1}" for i in range(3)] + 
+                     [f"Scientific Breakthrough in Medical Research" for i in range(3)] +
+                     [f"Policy Update and Global Initiatives" for i in range(4)] +
+                     [f"URGENT: {i+1} Thing They Don't Want You To Know!" for i in range(5)] +
+                     [f"SHOCKING: Secret {i+1} That Will Change Everything!" for i in range(5)],
+            'label': [1] * len(real_news) + [0] * len(fake_news),
+            'source': ['Reuters', 'Associated Press', 'BBC News', 'Science Daily', 'WHO Report',
+                      'Economic Times', 'Research Journal', 'UN News', 'Nature', 'Medical Journal'] +
+                     ['TruthSeeker Blog', 'Conspiracy Facts', 'Real News Network', 'Freedom Press',
+                      'Wake Up America', 'Alternative Facts', 'The People\'s Voice', 'Real Truth',
+                      'Underground News', 'Liberty Report'],
+            'date': [f"2024-{i+1:02d}-15" for i in range(10)] + 
+                    [f"2024-{i+1:02d}-15" for i in range(10)]
+        }
+        
+        return pd.DataFrame(data)
+    
+    def load_data(self, file_path=None):
+        """Load and prepare dataset"""
+        if file_path:
+            self.df = pd.read_csv(file_path)
+            print(f"Loaded dataset from {file_path}")
+        else:
+            print("Using comprehensive sample dataset...")
+            self.df = self.create_comprehensive_dataset()
+        
+        print(f"Dataset Statistics:")
+        print(f"Total samples: {len(self.df)}")
+        print(f"Real news: {sum(self.df['label'] == 1)}")
+        print(f"Fake news: {sum(self.df['label'] == 0)}")
+        print(f"Columns: {list(self.df.columns)}")
+        
+        return self.df
+    
+    def explore_dataset(self):
+        """Comprehensive dataset exploration"""
+        print("\n" + "="*60)
+        print("DATASET EXPLORATION")
+        print("="*60)
+        
+        # Basic statistics
+        print(f"\nDataset Shape: {self.df.shape}")
+        print(f"Label Distribution:\n{self.df['label'].value_counts()}")
+        
+        # Text length analysis
+        self.df['text_length'] = self.df['text'].apply(len)
+        self.df['word_count'] = self.df['text'].apply(lambda x: len(x.split()))
+        
+        print(f"\nText Length Statistics:")
+        print(f"Average text length: {self.df['text_length'].mean():.2f} characters")
+        print(f"Average word count: {self.df['word_count'].mean():.2f} words")
+        
+        # Source analysis
+        if 'source' in self.df.columns:
+            print(f"\nTop Sources:")
+            print(self.df['source'].value_counts().head())
+        
+        return self.df
+    
+    def preprocess_data(self):
+        """Advanced data preprocessing"""
+        print("\nPreprocessing data...")
+        
+        # Clean text
+        self.df['cleaned_text'] = self.df['text'].apply(self.preprocessor.clean_text)
+        
+        # Extract comprehensive features
+        print("Extracting advanced features...")
+        metadata_features = []
+        feature_names = []
+        
+        for text in self.df['cleaned_text']:
+            features = self.preprocessor.extract_advanced_features(text)
+            if not feature_names:
+                feature_names = list(features.keys())
+            metadata_features.append(list(features.values()))
+        
+        self.metadata_features = np.array(metadata_features)
+        self.feature_names = feature_names
+        
+        print(f"Extracted {len(feature_names)} metadata features")
+        print("Preprocessing completed!")
+        
+    def create_features(self):
+        """Create all features for training"""
+        print("\nCreating features...")
+        
+        texts = self.df['cleaned_text'].tolist()
+        
+        # Traditional ML features
+        self.X = self.feature_engineer.create_advanced_features(texts, self.metadata_features)
+        self.y = self.df['label'].values
+        
+        # Deep learning sequences
+        if self.use_deep_learning:
+            self.X_sequences = self.feature_engineer.create_sequence_features(texts)
+        
+        print(f"Feature matrix shape: {self.X.shape}")
+        if self.use_deep_learning:
+            print(f"Sequence data shape: {self.X_sequences.shape}")
+    
+    def train_traditional_models(self, test_size=0.2, random_state=42):
+        """Train traditional machine learning models"""
+        print("\n" + "="*60)
+        print("TRAINING TRADITIONAL MACHINE LEARNING MODELS")
+        print("="*60)
+        
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(
+            self.X, self.y, test_size=test_size, random_state=random_state, stratify=self.y
+        )
+        
+        # Define models with hyperparameters
+        models = {
+            'logistic_regression': LogisticRegression(
+                random_state=42, max_iter=1000, C=1.0, class_weight='balanced'
+            ),
+            'random_forest': RandomForestClassifier(
+                random_state=42, n_estimators=200, max_depth=15, min_samples_split=5,
+                class_weight='balanced', n_jobs=-1
+            ),
+            'svm': SVC(
+                random_state=42, probability=True, C=1.0, kernel='rbf',
+                class_weight='balanced'
+            ),
+            'gradient_boosting': GradientBoostingClassifier(
+                random_state=42, n_estimators=100, learning_rate=0.1,
+                max_depth=5
+            ),
+            'naive_bayes': MultinomialNB(alpha=0.1),
+            'ada_boost': AdaBoostClassifier(
+                random_state=42, n_estimators=100
+            )
+        }
+        
+        # Train and evaluate models
+        results = {}
+        for name, model in models.items():
+            print(f"\nTraining {name.replace('_', ' ').title()}...")
+            start_time = time.time()
+            
+            try:
+                if name == 'naive_bayes':
+                    # Handle non-negative features for Naive Bayes
+                    X_train_nb = X_train - X_train.min()
+                    X_test_nb = X_test - X_test.min()
+                    model.fit(X_train_nb, y_train)
+                    y_pred = model.predict(X_test_nb)
+                    y_pred_proba = model.predict_proba(X_test_nb)
+                else:
+                    model.fit(X_train, y_train)
+                    y_pred = model.predict(X_test)
+                    y_pred_proba = model.predict_proba(X_test)
+                
+                training_time = time.time() - start_time
+                
+                # Calculate metrics
+                accuracy = accuracy_score(y_test, y_pred)
+                auc_score = roc_auc_score(y_test, y_pred_proba[:, 1])
+                
+                # Cross-validation
+                cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring='accuracy')
+                
+                results[name] = {
+                    'model': model,
+                    'accuracy': accuracy,
+                    'auc_score': auc_score,
+                    'cv_mean': cv_scores.mean(),
+                    'cv_std': cv_scores.std(),
+                    'predictions': y_pred,
+                    'probabilities': y_pred_proba,
+                    'training_time': training_time
+                }
+                
+                print(f"✅ {name.replace('_', ' ').title():20} | "
+                      f"Accuracy: {accuracy:.4f} | AUC: {auc_score:.4f} | "
+                      f"CV: {cv_scores.mean():.4f} ± {cv_scores.std():.4f} | "
+                      f"Time: {training_time:.2f}s")
+                
+            except Exception as e:
+                print(f"❌ Error training {name}: {e}")
+        
+        self.traditional_results = results
+        self.X_test_trad = X_test
+        self.y_test_trad = y_test
+        
+        # Select best traditional model
+        best_trad_name = max(results.keys(), 
+                           key=lambda x: results[x]['auc_score'])
+        self.best_traditional_model = results[best_trad_name]['model']
+        
+        print(f"\n🏆 Best Traditional Model: {best_trad_name.replace('_', ' ').title()} "
+              f"(AUC: {results[best_trad_name]['auc_score']:.4f})")
+        
+        return results
+    
+    def train_deep_learning_model(self, test_size=0.2, random_state=42, epochs=50, batch_size=32):
+        """Train deep learning model"""
+        if not self.use_deep_learning:
+            print("Deep learning disabled or TensorFlow not available")
+            return None
+        
+        print("\n" + "="*60)
+        print("TRAINING DEEP LEARNING MODEL")
+        print("="*60)
+        
+        # Split sequence data
+        X_seq_train, X_seq_test, y_seq_train, y_seq_test = train_test_split(
+            self.X_sequences, self.y, test_size=test_size, 
+            random_state=random_state, stratify=self.y
+        )
+        
+        # Build and train LSTM model
+        print("Building LSTM model...")
+        model = self.dl_model.build_lstm_model()
+        
+        print("Model Architecture:")
+        model.summary()
+        
+        # Callbacks
+        callbacks = [
+            tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True),
+            tf.keras.callbacks.ReduceLROnPlateau(patience=3, factor=0.5)
+        ]
+        
+        # Train model
+        print("Training LSTM model...")
+        start_time = time.time()
+        
+        history = model.fit(
+            X_seq_train, y_seq_train,
+            epochs=epochs,
+            batch_size=batch_size,
+            validation_data=(X_seq_test, y_seq_test),
+            callbacks=callbacks,
+            verbose=1
+        )
+        
+        training_time = time.time() - start_time
+        
+        # Evaluate model
+        y_pred_proba = model.predict(X_seq_test)
+        y_pred = (y_pred_proba > 0.5).astype(int).flatten()
+        
+        accuracy = accuracy_score(y_seq_test, y_pred)
+        auc_score = roc_auc_score(y_seq_test, y_pred_proba)
+        
+        self.dl_results = {
+            'model': model,
+            'history': history.history,
+            'accuracy': accuracy,
+            'auc_score': auc_score,
+            'predictions': y_pred,
+            'probabilities': y_pred_proba,
+            'training_time': training_time
+        }
+        
+        self.X_test_dl = X_seq_test
+        self.y_test_dl = y_seq_test
+        
+        print(f"✅ Deep Learning LSTM | "
+              f"Accuracy: {accuracy:.4f} | AUC: {auc_score:.4f} | "
+              f"Time: {training_time:.2f}s")
+        
+        return self.dl_results
+    
+    def create_ensemble_model(self):
+        """Create advanced ensemble model"""
+        print("\n" + "="*60)
+        print("CREATING ENSEMBLE MODEL")
+        print("="*60)
+        
+        # Select top models for ensemble
+        all_results = {}
+        if hasattr(self, 'traditional_results'):
+            all_results.update(self.traditional_results)
+        if hasattr(self, 'dl_results'):
+            all_results['deep_learning'] = self.dl_results
+        
+        if len(all_results) < 2:
+            print("Need at least 2 models for ensemble")
+            return
+        
+        # Select top 3 models by AUC score
+        top_models = sorted(all_results.items(), 
+                          key=lambda x: x[1]['auc_score'], 
+                          reverse=True)[:3]
+        
+        print("Top models selected for ensemble:")
+        for name, result in top_models:
+            print(f"  - {name.replace('_', ' ').title()} (AUC: {result['auc_score']:.4f})")
+        
+        # Create ensemble predictions (weighted by AUC score)
+        total_auc = sum(result['auc_score'] for _, result in top_models)
+        ensemble_proba = np.zeros_like(top_models[0][1]['probabilities'])
+        
+        for name, result in top_models:
+            weight = result['auc_score'] / total_auc
+            ensemble_proba += result['probabilities'] * weight
+        
+        ensemble_pred = (ensemble_proba[:, 1] > 0.5).astype(int)
+        
+        # Calculate ensemble metrics
+        if hasattr(self, 'y_test_trad'):
+            y_test = self.y_test_trad
+        else:
+            y_test = self.y_test_dl
+        
+        accuracy = accuracy_score(y_test, ensemble_pred)
+        auc_score = roc_auc_score(y_test, ensemble_proba[:, 1])
+        
+        self.ensemble_results = {
+            'accuracy': accuracy,
+            'auc_score': auc_score,
+            'predictions': ensemble_pred,
+            'probabilities': ensemble_proba
+        }
+        
+        print(f"✅ Ensemble Model | Accuracy: {accuracy:.4f} | AUC: {auc_score:.4f}")
+        
+        # Determine best overall model
+        best_overall = max([(name, result['auc_score']) for name, result in all_results.items()] + 
+                          [('ensemble', self.ensemble_results['auc_score'])],
+                          key=lambda x: x[1])
+        
+        print(f"\n🏆 Best Overall Model: {best_overall[0].replace('_', ' ').title()} "
+              f"(AUC: {best_overall[1]:.4f})")
+        
+        if best_overall[0] in self.traditional_results:
+            self.best_model = self.traditional_results[best_overall[0]]['model']
+        elif best_overall[0] == 'deep_learning':
+            self.best_model = self.dl_results['model']
+        else:
+            self.best_model = 'ensemble'
+        
+        self.is_trained = True
+        
+        return self.ensemble_results
+    
+    def comprehensive_evaluation(self):
+        """Comprehensive model evaluation with visualizations"""
+        if not self.is_trained:
+            print("Models not trained yet")
+            return
+        
+        print("\n" + "="*60)
+        print("COMPREHENSIVE MODEL EVALUATION")
+        print("="*60)
+        
+        # Collect all results
+        all_results = {}
+        if hasattr(self, 'traditional_results'):
+            all_results.update(self.traditional_results)
+        if hasattr(self, 'dl_results'):
+            all_results['deep_learning'] = self.dl_results
+        if hasattr(self, 'ensemble_results'):
+            all_results['ensemble'] = self.ensemble_results
+        
+        # Create comparison table
+        comparison_data = []
+        for name, result in all_results.items():
+            y_pred = result['predictions']
+            if hasattr(self, 'y_test_trad'):
+                y_test = self.y_test_trad
+            else:
+                y_test = self.y_test_dl
+            
+            # Calculate additional metrics
+            report = classification_report(y_test, y_pred, output_dict=True)
+            precision = report['weighted avg']['precision']
+            recall = report['weighted avg']['recall']
+            f1 = report['weighted avg']['f1-score']
+            
+            comparison_data.append({
+                'Model': name.replace('_', ' ').title(),
+                'Accuracy': result['accuracy'],
+                'AUC Score': result.get('auc_score', 0),
+                'Precision': precision,
+                'Recall': recall,
+                'F1-Score': f1,
+                'Training Time (s)': result.get('training_time', 0)
+            })
+        
+        comparison_df = pd.DataFrame(comparison_data)
+        print("\nModel Comparison:")
+        print(comparison_df.round(4))
+        
+        # Create visualizations
+        self.create_evaluation_visualizations(all_results, comparison_df)
+        
+        return comparison_df
+    
+    def create_evaluation_visualizations(self, results, comparison_df):
+        """Create comprehensive evaluation visualizations"""
+        print("\nGenerating visualizations...")
+        
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=('Model Performance Comparison', 'ROC Curves', 
+                          'Training Time Comparison', 'Confusion Matrix - Best Model'),
+            specs=[[{"type": "bar"}, {"type": "scatter"}],
+                   [{"type": "bar"}, {"type": "heatmap"}]]
+        )
+        
+        # Model performance comparison
+        models = comparison_df['Model'].tolist()
+        accuracy = comparison_df['Accuracy'].tolist()
+        auc_scores = comparison_df['AUC Score'].tolist()
+        
+        fig.add_trace(
+            go.Bar(name='Accuracy', x=models, y=accuracy, marker_color='lightblue'),
+            row=1, col=1
+        )
+        fig.add_trace(
+            go.Bar(name='AUC Score', x=models, y=auc_scores, marker_color='lightcoral'),
+            row=1, col=1
+        )
+        
+        # ROC Curves
+        if hasattr(self, 'y_test_trad'):
+            y_test = self.y_test_trad
+        else:
+            y_test = self.y_test_dl
+            
+        for name, result in results.items():
+            if 'probabilities' in result:
+                fpr, tpr, _ = roc_curve(y_test, result['probabilities'][:, 1])
+                auc_score = roc_auc_score(y_test, result['probabilities'][:, 1])
+                fig.add_trace(
+                    go.Scatter(x=fpr, y=tpr, 
+                             name=f'{name.replace("_", " ").title()} (AUC = {auc_score:.3f})',
+                             mode='lines'),
+                    row=1, col=2
+                )
+        
+        # Add diagonal line for ROC
+        fig.add_trace(
+            go.Scatter(x=[0, 1], y=[0, 1], mode='lines', 
+                      line=dict(dash='dash', color='gray'),
+                      name='Random Classifier', showlegend=False),
+            row=1, col=2
+        )
+        
+        # Training time comparison
+        training_times = comparison_df['Training Time (s)'].tolist()
+        fig.add_trace(
+            go.Bar(x=models, y=training_times, marker_color='lightgreen',
+                  name='Training Time (s)'),
+            row=2, col=1
+        )
+        
+        # Confusion matrix for best model
+        best_model_name = comparison_df.loc[comparison_df['AUC Score'].idxmax(), 'Model']
+        best_result = results[best_model_name.lower().replace(' ', '_')]
+        cm = confusion_matrix(y_test, best_result['predictions'])
+        
+        fig.add_trace(
+            go.Heatmap(z=cm, x=['Predicted Fake', 'Predicted Real'],
+                      y=['Actual Fake', 'Actual Real'], 
+                      colorscale='Blues', showscale=False,
+                      text=cm, texttemplate="%{text}"),
+            row=2, col=2
+        )
+        
+        fig.update_layout(height=800, showlegend=True, 
+                         title_text="Fake News Detection Model Evaluation")
+        fig.show()
+        
+        # Feature importance for tree-based models
+        if hasattr(self, 'traditional_results') and 'random_forest' in self.traditional_results:
+            self.plot_feature_importance()
+    
+    def plot_feature_importance(self, top_n=15):
+        """Plot feature importance for tree-based models"""
+        rf_model = self.traditional_results['random_forest']['model']
+        
+        if hasattr(rf_model, 'feature_importances_'):
+            importance = rf_model.feature_importances_
+            
+            # Get feature names
+            feature_names = (
+                [f"TF-IDF_{i}" for i in range(5000)] + 
+                [f"SVD_{i}" for i in range(50)] + 
+                [f"LDA_{i}" for i in range(20)] + 
+                self.feature_names
+            )[:len(importance)]
+            
+            # Create feature importance dataframe
+            feature_imp_df = pd.DataFrame({
+                'feature': feature_names,
+                'importance': importance
+            }).sort_values('importance', ascending=False).head(top_n)
+            
+            plt.figure(figsize=(10, 8))
+            sns.barplot(data=feature_imp_df, y='feature', x='importance', palette='viridis')
+            plt.title(f'Top {top_n} Most Important Features (Random Forest)')
+            plt.xlabel('Feature Importance')
+            plt.tight_layout()
+            plt.show()
+    
+    def predict_news(self, text, model_type='best'):
+        """Predict if news is fake or real with detailed analysis"""
+        if not self.is_trained:
+            print("Model not trained yet. Please train the model first.")
+            return None
+        
+        # Preprocess text
+        cleaned_text = self.preprocessor.clean_text(text)
+        
+        # Extract features
+        features = self.preprocessor.extract_advanced_features(text)
+        metadata_features = np.array(list(features.values())).reshape(1, -1)
+        
+        # Create features
+        ml_features = self.feature_engineer.create_advanced_features([cleaned_text], metadata_features)
+        
+        # Get prediction from best model
+        if model_type == 'best' and self.best_model != 'ensemble':
+            if hasattr(self.best_model, 'predict_proba'):
+                probability = self.best_model.predict_proba(ml_features)[0]
+                prediction = self.best_model.predict(ml_features)[0]
+            else:
+                # For deep learning model
+                sequences = self.feature_engineer.create_sequence_features([cleaned_text])
+                probability = self.best_model.predict(sequences)[0]
+                prediction = (probability > 0.5).astype(int)[0]
+        else:
+            # Use ensemble if available
+            if hasattr(self, 'ensemble_results'):
+                # Simplified ensemble prediction
+                predictions = []
+                probabilities = []
+                
+                for name, result in self.traditional_results.items():
+                    if hasattr(result['model'], 'predict_proba'):
+                        proba = result['model'].predict_proba(ml_features)[0]
+                        predictions.append(result['model'].predict(ml_features)[0])
+                        probabilities.append(proba)
+                
+                # Average probabilities
+                avg_proba = np.mean(probabilities, axis=0)
+                prediction = (avg_proba[1] > 0.5).astype(int)
+                probability = avg_proba
+            else:
+                print("No suitable model found for prediction")
+                return None
+        
+        # Detailed analysis
+        analysis = {
+            'text_analysis': {
+                'original_length': len(text),
+                'cleaned_length': len(cleaned_text),
+                'word_count': features['word_count'],
+                'readability_score': features['readability_score'],
+                'sentiment': features['sentiment_compound'],
+                'sensational_score': features['sensational_score'],
+                'clickbait_score': features['clickbait_score']
+            },
+            'prediction': {
+                'result': 'REAL' if prediction == 1 else 'FAKE',
+                'confidence': probability[1] if prediction == 1 else probability[0],
+                'real_probability': probability[1],
+                'fake_probability': probability[0],
+                'risk_level': 'HIGH' if features['sensational_score'] > 50 else 'MEDIUM' if features['sensational_score'] > 25 else 'LOW'
+            },
+            'indicators': {
+                'high_exclamation': features['exclamation_ratio'] > 0.05,
+                'high_uppercase': features['uppercase_ratio'] > 0.1,
+                'fake_keywords': features['fake_keyword_count'] > 2,
+                'poor_readability': features['readability_score'] < 30,
+                'negative_sentiment': features['sentiment_compound'] < -0.1
+            }
+        }
+        
+        return analysis
+    
+    def analyze_text_characteristics(self, text):
+        """Provide detailed text analysis"""
+        features = self.preprocessor.extract_advanced_features(text)
+        
+        print("\n" + "="*60)
+        print("TEXT ANALYSIS REPORT")
+        print("="*60)
+        
+        print(f"\n📊 Basic Statistics:")
+        print(f"  • Word Count: {features['word_count']}")
+        print(f"  • Character Count: {features['char_count']}")
+        print(f"  • Sentence Count: {features['sentence_count']}")
+        print(f"  • Average Sentence Length: {features['avg_sentence_length']:.1f} words")
+        
+        print(f"\n🎯 Readability & Quality:")
+        print(f"  • Readability Score: {features['readability_score']:.1f}")
+        print(f"  • Vocabulary Richness: {features['vocabulary_richness']:.2%}")
+        print(f"  • Long Word Ratio: {features['long_word_ratio']:.2%}")
+        
+        print(f"\n😊 Sentiment Analysis:")
+        print(f"  • Overall Sentiment: {features['sentiment_compound']:.3f}")
+        print(f"  • Positive Score: {features['sentiment_positive']:.3f}")
+        print(f"  • Negative Score: {features['sentiment_negative']:.3f}")
+        print(f"  • Neutral Score: {features['sentiment_neutral']:.3f}")
+        
+        print(f"\n⚠️  Fake News Indicators:")
+        print(f"  • Sensational Score: {features['sensational_score']:.1f}/100")
+        print(f"  • Clickbait Score: {features['clickbait_score']:.1f}/100")
+        print(f"  • Fake Keywords: {features['fake_keyword_count']}")
+        print(f"  • Exclamation Ratio: {features['exclamation_ratio']:.2%}")
+        print(f"  • Uppercase Ratio: {features['uppercase_ratio']:.2%}")
+        
+        # Risk assessment
+        risk_score = (
+            features['sensational_score'] * 0.3 +
+            features['clickbait_score'] * 0.3 +
+            (features['fake_keyword_count'] / features['word_count'] * 100) * 0.2 +
+            (features['exclamation_ratio'] * 100) * 0.1 +
+            (features['uppercase_ratio'] * 100) * 0.1
+        )
+        
+        risk_level = "HIGH" if risk_score > 60 else "MEDIUM" if risk_score > 30 else "LOW"
+        
+        print(f"\n🔍 Risk Assessment:")
+        print(f"  • Overall Risk Score: {risk_score:.1f}/100")
+        print(f"  • Risk Level: {risk_level}")
+        
+        return features
+    
+    def save_model(self, file_path='enhanced_fake_news_detector.pkl'):
+        """Save the complete model system"""
+        model_data = {
+            'preprocessor': self.preprocessor,
+            'feature_engineer': self.feature_engineer,
+            'best_model': self.best_model,
+            'traditional_results': getattr(self, 'traditional_results', None),
+            'dl_results': getattr(self, 'dl_results', None),
+            'ensemble_results': getattr(self, 'ensemble_results', None),
+            'is_trained': self.is_trained,
+            'feature_names': getattr(self, 'feature_names', None)
+        }
+        
+        joblib.dump(model_data, file_path)
+        print(f"✅ Model saved successfully to {file_path}")
+    
+    def load_model(self, file_path='enhanced_fake_news_detector.pkl'):
+        """Load a trained model system"""
+        try:
+            model_data = joblib.load(file_path)
+            
+            self.preprocessor = model_data['preprocessor']
+            self.feature_engineer = model_data['feature_engineer']
+            self.best_model = model_data['best_model']
+            self.traditional_results = model_data['traditional_results']
+            self.dl_results = model_data['dl_results']
+            self.ensemble_results = model_data['ensemble_results']
+            self.is_trained = model_data['is_trained']
+            self.feature_names = model_data['feature_names']
+            
+            print(f"✅ Model loaded successfully from {file_path}")
+        except FileNotFoundError:
+            print(f"❌ Model file {file_path} not found")
+        except Exception as e:
+            print(f"❌ Error loading model: {e}")
+
+def main():
+    """Main demonstration function"""
+    print("🚀 ENHANCED FAKE NEWS DETECTION SYSTEM")
+    print("="*70)
+    
+    # Initialize detector
+    detector = EnhancedFakeNewsDetector(use_deep_learning=TF_AVAILABLE)
+    
+    # Load and explore data
+    detector.load_data()
+    detector.explore_dataset()
+    
+    # Preprocess data
+    detector.preprocess_data()
+    
+    # Create features
+    detector.create_features()
+    
+    # Train models
+    traditional_results = detector.train_traditional_models()
+    
+    if TF_AVAILABLE:
+        dl_results = detector.train_deep_learning_model(epochs=30)
+    
+    # Create ensemble
+    ensemble_results = detector.create_ensemble_model()
+    
+    # Comprehensive evaluation
+    evaluation_df = detector.comprehensive_evaluation()
+    
+    # Save model
+    detector.save_model()
+    
+    # Demonstration of predictions
+    print("\n" + "="*70)
+    print("PREDICTION DEMONSTRATION")
+    print("="*70)
+    
+    test_cases = [
+        "Breaking news: International research team confirms significant progress in quantum computing, achieving new milestones in qubit stability and error correction that could revolutionize computing technology in the coming decade.",
+        "URGENT WARNING: Secret government program controlling weather patterns to create artificial disasters! Whistleblower reveals terrifying truth about HAARP technology and climate manipulation! SHARE BEFORE IT'S DELETED!",
+        "A comprehensive study published in the Journal of Medical Research demonstrates the long-term benefits of regular physical activity on cognitive function and mental health across different age groups.",
+        "ONE WEIRD TRICK to completely ELIMINATE belly fat overnight! Doctors HATE this simple method that requires NO exercise and NO diet! Celebrities are using it to stay skinny!",
+        "Economic analysts report steady market growth with positive indicators across major sectors, suggesting sustained recovery and investment opportunities in emerging technologies.",
+        "SHOCKING CONSPIRACY: The moon landing was completely FAKED! New evidence proves NASA has been lying for decades! They're hiding alien technology that could provide FREE ENERGY for everyone!"
+    ]
+    
+    for i, text in enumerate(test_cases, 1):
+        print(f"\n{'─'*50}")
+        print(f"TEST CASE {i}:")
+        print(f"{'─'*50}")
+        
+        # Detailed text analysis
+        features = detector.analyze_text_characteristics(text)
+        
+        # Prediction
+        result = detector.predict_news(text)
+        if result:
+            print(f"\n🎯 PREDICTION: {result['prediction']['result']}")
+            print(f"📊 Confidence: {result['prediction']['confidence']:.2%}")
+            print(f"🔍 Risk Level: {result['prediction']['risk_level']}")
+            print(f"📈 Real Probability: {result['prediction']['real_probability']:.2%}")
+            print(f"📉 Fake Probability: {result['prediction']['fake_probability']:.2%}")
+            
+            # Show key indicators
+            print(f"\n⚠️  Key Indicators:")
+            indicators = result['indicators']
+            for indicator, value in indicators.items():
+                status = "❌" if value else "✅"
+                print(f"  {status} {indicator.replace('_', ' ').title()}: {value}")
+    
+    return detector
+
+if __name__ == "__main__":
+    # Run the complete enhanced system
+    detector = main()
+    
+    # Example of using loaded model
+    print("\n" + "="*70)
+    print("USING SAVED MODEL FOR PREDICTION")
+    print("="*70)
+    
+    new_detector = EnhancedFakeNewsDetector()
+    new_detector.load_model('enhanced_fake_news_detector.pkl')
+    
+    if new_detector.is_trained:
+        sample_text = "Groundbreaking archaeological discovery reveals new insights into ancient civilizations, with artifacts suggesting advanced technological knowledge that challenges conventional historical timelines."
+        result = new_detector.predict_news(sample_text)
+        if result:
+            print(f"Text: {sample_text[:100]}...")
+            print(f"Prediction: {result['prediction']['result']}")
+            print(f"Confidence: {result['prediction']['confidence']:.2%}")
+
+# Additional utility functions
+def real_time_monitoring_example():
+    """Example of real-time news monitoring"""
+    print("\n" + "="*70)
+    print("REAL-TIME MONITORING EXAMPLE")
+    print("="*70)
+    
+    detector = EnhancedFakeNewsDetector()
+    detector.load_model('enhanced_fake_news_detector.pkl')
+    
+    if detector.is_trained:
+        # Simulate incoming news stream
+        news_stream = [
+            "Breaking: Stock markets reach all-time high amid positive economic indicators",
+            "URGENT: Secret cure for cancer revealed but doctors are hiding it!",
+            "New study shows benefits of Mediterranean diet for heart health",
+            "SHOCKING: Government surveillance program exposed - they're watching YOU!"
+        ]
+        
+        for news in news_stream:
+            result = detector.predict_news(news)
+            if result:
+                status = "🔴 FAKE" if result['prediction']['result'] == 'FAKE' else "🟢 REAL"
+                print(f"{status} | {news[:60]}... | Confidence: {result['prediction']['confidence']:.2%}")
+
+if __name__ == "__main__":
+    real_time_monitoring_example()
